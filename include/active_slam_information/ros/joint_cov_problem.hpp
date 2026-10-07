@@ -52,12 +52,14 @@ struct JointCovProblem {
   std::map<int, int> col_of_state;               // OpenVINS state id -> message column
   std::map<double, int> clone_col;               // clone timestamp -> message column
 
-  // Scoring map: IMU (15) + metric XYZ of the landmarks whose ids are in `keep`
-  // (all usable landmarks if keep is empty).
-  Eigen::MatrixXd T_metric(const std::set<long long>& keep = {}) const {
+  // Scoring map: IMU (15) + metric XYZ of the landmarks whose ids are in *keep,
+  // or of ALL usable landmarks if keep is null. An EMPTY set means IMU only
+  // (PATCHES s62: an empty set used to mean "all", which silently changed the
+  // marginal in segments where no landmark survived).
+  Eigen::MatrixXd T_metric(const std::set<long long>* keep = nullptr) const {
     std::vector<int> sel;
     for (size_t j = 0; j < landmarks.size(); ++j)
-      if (keep.empty() || keep.count(landmarks[j].id)) sel.push_back((int)j);
+      if (keep == nullptr || keep->count(landmarks[j].id)) sel.push_back((int)j);
     Eigen::MatrixXd T = Eigen::MatrixXd::Zero(15 + 3 * (int)sel.size(), Sigma.cols());
     T.block(0, imu_col, 15, 15).setIdentity();
     for (size_t k = 0; k < sel.size(); ++k)
