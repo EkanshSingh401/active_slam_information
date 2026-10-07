@@ -257,6 +257,49 @@ int main() {
     std::printf("  frontier gain increases with declared frontier uncertainty sigma_l\n");
   }
 
+  std::printf("== virtual landmark gain vs sigma_l, closed form ==\n");
+  {
+    // One virtual landmark with prior sigma_l^2 I_3, uncorrelated with everything,
+    // scored ALONE, one 2D measurement with Jacobian H (2x3) and noise s^2 I_2:
+    //   delta = log det(I_2 + sigma_l^2 H R^-1 H^T),  R = s^2 I_2 + H_x Sigma_x H_x^T
+    // where H_x is the measurement's block on the (uncertain) current pose: the pose
+    // uncertainty is effective measurement noise for the scored landmark.
+    // Checked over 7 decades of sigma_l, including the crossover sigma_l ~ s / |H|
+    // below which the virtual landmark contributes almost nothing.
+    const SynthState s = make_state(10, 3);
+    Pose cur;
+    CameraModel cam;
+    LandmarkLinearization lm;
+    lm.is_virtual = true;
+    lm.p_FinG = Vector3d(0.3, -0.2, 4.0);
+    lm.rep = {{s.n, Eigen::Matrix3d::Identity()}};
+    ConstantNoiseModel noise(1.0);
+    PredictedMeasurement pm;
+    CHECK(predict_measurement(cur, cur, 0, cam, lm, noise, nullptr, &pm), "virtual landmark not visible");
+    MatrixXd H, Hx;
+    int cx = -1;
+    for (const auto& b : pm.blocks) {
+      if (b.col == s.n) H = b.J; else { Hx = b.J; cx = b.col; }
+    }
+    const Eigen::Matrix2d R = pm.sigma * pm.sigma * Eigen::Matrix2d::Identity() +
+                              Hx * s.Sigma.block(cx, cx, Hx.cols(), Hx.cols()) * Hx.transpose();
+    double prev = -1;
+    bool mono = true, closed = true;
+    for (double sl : {1e-4, 1e-3, 1e-2, 1e-1, 1.0, 10.0}) {
+      const MatrixXd Sa = augment_with_virtual_landmarks(s.Sigma, 1, sl);
+      MatrixXd T = MatrixXd::Zero(3, Sa.cols());
+      T.block(0, s.n, 3, 3).setIdentity();
+      const double d = evaluate(InformationPrior(Sa, T), {pm}).delta;
+      const double ref = std::log((Eigen::Matrix2d::Identity() + sl * sl * H * H.transpose() * R.inverse()).determinant());
+      if (rel(d, ref) > 1e-6 && std::fabs(d - ref) > 1e-9) closed = false;
+      if (d <= prev) mono = false;
+      std::printf("  sigma_l %-7g gain %.6f nats (closed form %.6f)\n", sl, d, ref);
+      prev = d;
+    }
+    CHECK(closed, "virtual-landmark gain does not match log det(I + sigma_l^2 H H^T / s^2)");
+    CHECK(mono, "virtual-landmark gain not increasing in sigma_l");
+  }
+
   std::printf("== Jacobians vs central finite differences ==\n");
   {
     // Measurement as a function of [dth_now(3), dp_now(3), dp_F(3)], using the
