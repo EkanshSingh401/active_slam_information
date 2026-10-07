@@ -300,6 +300,43 @@ int main() {
     CHECK(mono, "virtual-landmark gain not increasing in sigma_l");
   }
 
+  std::printf("== pose-marginal objective: T = IMU pose (6), real + virtual landmarks ==\n");
+  {
+    // dI_pose scores only the 6-dof IMU pose; every landmark (real and virtual) is
+    // marginalized out. Fast path (Sylvester) vs brute-force full Kalman update.
+    double worst = 0;
+    for (unsigned seed = 1; seed <= 20; ++seed) {
+      const SynthState s = make_state(20 + seed % 7, seed);
+      const int nv = 4;
+      const MatrixXd Sa = augment_with_virtual_landmarks(s.Sigma, nv, 0.5);
+      MatrixXd T = MatrixXd::Zero(6, Sa.cols());
+      T.block(0, 0, 6, 6).setIdentity();
+      Pose cur, cand;
+      cand.p_IinG = Vector3d(0.2, -0.1, 0.05);
+      CameraModel cam;
+      ConstantNoiseModel noise(1.0);
+      std::vector<PredictedMeasurement> meas;
+      for (const auto& lm : s.landmarks) {
+        PredictedMeasurement pm;
+        if (predict_measurement(cur, cand, 0, cam, lm, noise, nullptr, &pm)) meas.push_back(pm);
+      }
+      for (int k = 0; k < nv; ++k) {
+        LandmarkLinearization v;
+        v.is_virtual = true;
+        v.p_FinG = Vector3d(-0.6 + 0.4 * k, 0.2, 3.5);
+        v.rep = {{s.n + 3 * k, Eigen::Matrix3d::Identity()}};
+        PredictedMeasurement pm;
+        if (predict_measurement(cur, cand, 0, cam, v, noise, nullptr, &pm)) meas.push_back(pm);
+      }
+      const InformationGain fast = evaluate(InformationPrior(Sa, T), meas);
+      const InformationGain ref = evaluate_reference(Sa, T, meas);
+      CHECK(fast.ok && ref.ok, "seed %u: pose-marginal evaluation failed", seed);
+      worst = std::max(worst, std::fabs(fast.delta - ref.delta) / std::max(1.0, std::fabs(ref.delta)));
+    }
+    CHECK(worst < 1e-7, "pose-marginal fast vs reference rel err %.3g", worst);
+    std::printf("  worst rel err %.2e over 20 states (pose block only, landmarks marginalized)\n", worst);
+  }
+
   std::printf("== Jacobians vs central finite differences ==\n");
   {
     // Measurement as a function of [dth_now(3), dp_now(3), dp_F(3)], using the

@@ -102,3 +102,42 @@ integration step. Until that passes, no score from this code is trustworthy.
 - **Normalized-coordinate noise** $\sigma_{px}/\bar f$. Equivalent to
   OpenVINS's pixel-space noise only up to distortion, which is near zero
   on the D455.
+
+## Second scoring mode: pose-marginal information + coverage (day 2)
+
+$$\text{score}(c) = \Delta I_{\text{pose}}(c) + \lambda\, V_{\text{new}}(c)$$
+
+**Pose term.** Scoring map $T_{\text{pose}} = [\,0 \;\cdots\; I_6 \;\cdots\; 0\,]$ selecting the
+6-dof IMU pose (orientation error, position) — every landmark, real and virtual, is outside
+$T$ and therefore **marginalized out**: the scored covariance is
+$\Sigma_S = T_{\text{pose}}\Sigma T_{\text{pose}}^\top$, the pose marginal of the joint. The
+Sylvester identity above holds for any full-row-rank $T$, so the fast path is unchanged:
+$\log\det\Sigma_S^+ = \log\det\Sigma_S - (\log\det A - \log\det D)$ with $A, D$ built from the
+same $H$ (real and virtual landmark blocks included in $H$; they still carry information *to*
+the pose through their correlation and the shared measurement).
+
+With travel the prior differs per candidate (OpenVINS propagation over the travel time,
+clone at the candidate). The pose term is measured against the **current** pose covariance:
+
+$$\Delta I_{\text{pose}}(c) = \log\det\Sigma_{\text{pose}}(\text{now}) - \log\det\Sigma^{+}_{\text{pose}}(c)$$
+$$= \underbrace{\log\det\Sigma_{\text{pose}}(\text{now}) - \log\det\Sigma_{\text{pose}}^{\text{prop}}(c)}_{\le 0:\ \text{cost of getting there}}
+   + \underbrace{\log\det\Sigma_{\text{pose}}^{\text{prop}}(c) - \log\det\Sigma^{+}_{\text{pose}}(c)}_{\ge 0:\ \text{measurement gain}}$$
+
+so a far candidate must earn back the uncertainty its travel adds. Code:
+`exploration_planner.cpp` (`planner_type: pose_cov`), `Tpose` over the propagated,
+virtual-augmented covariance; `posterior_logdet` from `evaluate()`; `log det Σ_pose(now)` by
+Cholesky of the current IMU pose block.
+
+**Coverage term.** $V_{\text{new}}(c)$ = unknown volume in the candidate's camera frustum,
+ray-cast through the mapper's coarse known-space map (`active_slam_sim/coverage_gain.hpp`):
+each ray $(x,y,1)$ on the image plane subtends
+$d\Omega = dx\,dy/(1+x^2+y^2)^{3/2}$; unknown steps $[r_1,r_2]$ before the first occupied cell
+add $d\Omega\,(r_2^3-r_1^3)/3$. Units m³; $\lambda$ in nats/m³.
+
+**Verification.**
+| test | result |
+|---|---|
+| pose-marginal fast vs brute-force Kalman update, T = pose (6), real + virtual landmarks, 20 states | worst rel. err 2.2e-14 |
+| coverage, empty map vs $\Omega R^3/3$ | 0.01% |
+| coverage, wall plane at 3 m vs pyramid volume | 0.04% |
+| coverage, all known free | 0 m³ |
