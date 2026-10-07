@@ -47,6 +47,16 @@ if(BUILD_TESTING)
   add_test(NAME test_information_gain COMMAND test_information_gain)
 endif()
 
+# ---- ROS 2 node (only when built in a ROS workspace with the messages) -------
+find_package(rclcpp QUIET)
+find_package(active_slam_msgs QUIET)
+if(ament_cmake_FOUND AND rclcpp_FOUND AND active_slam_msgs_FOUND)
+  add_executable(fisher_ig_estimator src/ros/fisher_ig_estimator_node.cpp)
+  target_link_libraries(fisher_ig_estimator ${PROJECT_NAME})
+  ament_target_dependencies(fisher_ig_estimator rclcpp active_slam_msgs)
+  install(TARGETS fisher_ig_estimator DESTINATION lib/${PROJECT_NAME})
+endif()
+
 # ---- ament ------------------------------------------------------------------
 if(ament_cmake_FOUND)
   ament_export_targets(export_${PROJECT_NAME} HAS_LIBRARY_TARGET)
