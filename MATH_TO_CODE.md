@@ -141,3 +141,40 @@ add $d\Omega\,(r_2^3-r_1^3)/3$. Units m³; $\lambda$ in nats/m³.
 | coverage, empty map vs $\Omega R^3/3$ | 0.01% |
 | coverage, wall plane at 3 m vs pyramid volume | 0.04% |
 | coverage, all known free | 0 m³ |
+
+## Random-walk tracking error (day 8; code in drone_multislam_orb3slam/active_slam_sim)
+
+**Measured mechanism** (drone_multislam_orb3slam REPORT_2026-10-10 step 2): a KLT track's pixel error is not
+independent from frame to frame; it accumulates along the track (error lag-1 autocorrelation 0.9–0.99 in sim;
+real EuRoC innovations are equally correlated). Model per image axis:
+
+    e_0 ~ N(0, s0^2),   e_k = e_(k-1) + d_k,   d_k ~ N(0, q^2 m_k)   (independent)
+
+with m_k the number of camera frames between samples k-1 and k (the planner samples waypoints, not every
+frame; summed per-frame increments have variance q^2 m_k). Then Cov(e_i, e_j) = s0^2 + q^2 M_min(i,j),
+M_k = sum_(l<=k) m_l.
+
+**Information.** For a track with stacked Jacobian H = [H_0; ...; H_(n-1)] (each 2 x dim, landmark and clone
+columns) the Fisher information is J = H^T Sigma_e^-1 H. The map y_0 = z_0, y_k = z_k - z_(k-1) is invertible
+and its noise (e_0, d_1, ..., d_(n-1)) is white, hence
+
+    J_RW = H_0^T H_0 / s0^2 + sum_(k>=1) (H_k - H_(k-1))^T (H_k - H_(k-1)) / (q^2 m_k)
+
+versus the white model J_W = sum_k H_k^T H_k / sigma^2. Consequences: (i) information from repeated, nearly
+identical views (H_k ~ H_(k-1): hover, slow rotation, slow translation) saturates near H_0^T H_0 / s0^2
+instead of growing linearly with n — the observed overconfidence; (ii) after the first sample a track adds
+information through how much the geometry *changes* along it, normalized by the drift accumulated in between,
+so a higher frame rate adds frames but not information.
+
+**Code.** `active_slam_sim::information_random_walk(track, n, s0, q2, frames)` (candidate_scoring.hpp) builds
+the differenced rows block by block (duplicate columns of consecutive samples are summed correctly by the
+block-pair accumulation). Planner option (exploration_planner, path score): `meas_model: random_walk`
+(default `white` = old behaviour), `rw_sigma0` (px), `rw_q2` (px^2 per frame), `rw_frame_rate` (frames/s).
+Real landmarks form tracks per (landmark, camera) over consecutive waypoints; a gap starts a new, independent
+track. The first predicted sample of a landmark already tracked before the decision is treated as a fresh
+track start (its past error is already in the filter; approximation). Virtual frontier landmarks keep the
+white model.
+
+**Tests** (test_candidate_scoring): J_RW = H^T Sigma_e^-1 H with Sigma_e built explicitly (relative error
+7e-16); q2 -> inf leaves only the first sample's information; Monte Carlo (20 000 random-walk error draws, GLS
+with prior I) reproduces (J_RW + I)^-1 within 1.3%.
