@@ -178,3 +178,20 @@ white model.
 **Tests** (test_candidate_scoring): J_RW = H^T Sigma_e^-1 H with Sigma_e built explicitly (relative error
 7e-16); q2 -> inf leaves only the first sample's information; Monte Carlo (20 000 random-walk error draws, GLS
 with prior I) reproduces (J_RW + I)^-1 within 1.3%.
+
+### Stereo and units (day 9)
+
+**Units.** `asi::predict_measurement` returns Jacobians in normalized image coordinates (x/z, y/z) and sets
+pm.sigma = sigma_px / f. The random-walk parameters are in pixels, so the code scales them by
+px_to_meas = 1/f (s0, sd) and 1/f^2 (q2). The day-8 version omitted this; its results are superseded.
+
+**Stereo.** The two cameras' KLT errors on the same feature drift together (sim training replays: per-frame
+increment correlation 0.3–0.7, disparity error 0.08 → 0.10 px over 20 frames while each camera's error grows
+0.13 → 0.38 px). Per image axis, stack (e_cam0, e_cam1): first sample Cov = [[s0², s0² − sd²/2], [·, s0²]],
+increments over m frames Cov = q² m [[1, ρ], [ρ, 1]]. Differencing in time still whitens exactly, so
+
+    J_stereo = Σ_k Σ_axis [r0 r1]_kᵀ C_k⁻¹ [r0 r1]_k
+
+with r_c the (time-differenced) Jacobian row of camera c. Fitted on training replays only: ρ = 0.97
+(0.95–0.98), sd = 0.10 px. Code `information_random_walk_stereo`; test vs H^T Σ⁻¹ H with Σ built explicitly
+(relative error 2.4e-14).
